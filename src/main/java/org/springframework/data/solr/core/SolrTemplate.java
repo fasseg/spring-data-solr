@@ -726,7 +726,7 @@ public class SolrTemplate implements SolrOperations, InitializingBean, Applicati
 			this.solrConverter = getDefaultSolrConverter();
 		}
 
-		this.queryParsers = new QueryParsers(this.mappingContext);
+		this.queryParsers.setMappingContext(this.mappingContext);
 		registerPersistenceExceptionTranslator();
 	}
 

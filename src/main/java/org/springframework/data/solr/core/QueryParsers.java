@@ -15,11 +15,6 @@
  */
 package org.springframework.data.solr.core;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
 import org.apache.solr.client.solrj.SolrQuery;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.solr.core.mapping.SolrPersistentEntity;
@@ -31,101 +26,83 @@ import org.springframework.data.solr.core.query.SolrDataQuery;
 import org.springframework.data.solr.core.query.TermsQuery;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
-import org.springframework.util.ClassUtils;
+
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * @author Christoph Strobl
  */
 public class QueryParsers {
 
-	private final QueryParser defaultQueryParser;
+    private final Map<Class<?>, QueryParser> queryParsers = new LinkedHashMap<>();
+    private final @Nullable
+    MappingContext<? extends SolrPersistentEntity<?>, SolrPersistentProperty> mappingContext;
+    private QueryParser defaultQueryParser;
+    private TermsQueryParser termsQueryParser;
 
-	private final List<QueryParserPair> parserPairs;
+    /**
+     * @param mappingContext can be {@literal null}.
+     * @since 4.0
+     */
+    public QueryParsers(@Nullable MappingContext<? extends SolrPersistentEntity<?>, SolrPersistentProperty> mappingContext) {
+        this.mappingContext = mappingContext;
+        this.defaultQueryParser = new DefaultQueryParser(mappingContext);
+        this.termsQueryParser = new TermsQueryParser(mappingContext);
 
-	private final Map<Class<?>, QueryParser> cache = new LinkedHashMap<>();
-	private final @Nullable MappingContext<? extends SolrPersistentEntity<?>, SolrPersistentProperty> mappingContext;
+        this.queryParsers.put(TermsQuery.class, this.termsQueryParser);
+        this.queryParsers.put(FacetQuery.class, this.defaultQueryParser);
+        this.queryParsers.put(HighlightQuery.class, this.defaultQueryParser);
+        this.queryParsers.put(Query.class, this.defaultQueryParser);
+    }
 
-	/**
-	 * @param mappingContext can be {@literal null}.
-	 * @since 4.0
-	 */
-	public QueryParsers(
-			@Nullable MappingContext<? extends SolrPersistentEntity<?>, SolrPersistentProperty> mappingContext) {
+    /**
+     * Get the {@link QueryParser} for given query type
+     *
+     * @param clazz
+     * @return {@link DefaultQueryParser} if no matching parser found
+     */
+    public QueryParser getForClass(final Class<? extends SolrDataQuery> clazz) {
+        for (final Map.Entry<Class<?>, QueryParser> entry : this.queryParsers.entrySet()) {
+            if (entry.getKey().isAssignableFrom(clazz)) {
+                return entry.getValue();
+            }
+        }
+        return defaultQueryParser;
+    }
 
-		this.parserPairs = new ArrayList<>(4);
-		this.mappingContext = mappingContext;
-		this.defaultQueryParser = new DefaultQueryParser(mappingContext);
+    /**
+     * Register additional {@link QueryParser} for {@link SolrQuery}
+     *
+     * @param clazz
+     * @param parser
+     */
+    public void registerParser(final Class<? extends SolrDataQuery> clazz, final QueryParser parser) {
+        Assert.notNull(parser, "Cannot register 'null' parser.");
+        queryParsers.put(clazz, parser);
+    }
 
-		parserPairs.add(new QueryParserPair(TermsQuery.class, new TermsQueryParser(mappingContext)));
-		parserPairs.add(new QueryParserPair(FacetQuery.class, defaultQueryParser));
-		parserPairs.add(new QueryParserPair(HighlightQuery.class, defaultQueryParser));
-		parserPairs.add(new QueryParserPair(Query.class, defaultQueryParser));
-	}
+    /**
+     * Update the {@link MappingContext} for all default query parsers. But leave the previously registered custom {@link QueryParser} untouched.
+     * Custom mapping context sensitive query parsers have to be re-registered, when the {@link MappingContext} changes.
+     *
+     * @param mappingContext
+     */
+    public void setMappingContext(final MappingContext<? extends SolrPersistentEntity<?>, SolrPersistentProperty> mappingContext) {
+        final Map<Class<?>, QueryParser> updatedParsers = new HashMap<>();
+        final DefaultQueryParser updatedDefaultQueryParser = new DefaultQueryParser(mappingContext);
+        final TermsQueryParser updatedTermsQueryParser = new TermsQueryParser(mappingContext);
 
-	/**
-	 * Get the {@link QueryParser} for given query type
-	 *
-	 * @param clazz
-	 * @return {@link DefaultQueryParser} if no matching parser found
-	 */
-	public QueryParser getForClass(Class<? extends SolrDataQuery> clazz) {
-
-		QueryParser queryParser = cache.get(clazz);
-		if (queryParser == null) {
-			for (QueryParserPair pair : parserPairs) {
-				if (pair.canParser(clazz)) {
-					this.cache.put(clazz, pair.getParser());
-					queryParser = pair.getParser();
-					break;
-				}
-			}
-		}
-
-		return queryParser != null ? queryParser : defaultQueryParser;
-	}
-
-	/**
-	 * Register additional {@link QueryParser} for {@link SolrQuery}
-	 *
-	 * @param clazz
-	 * @param parser
-	 */
-	public void registerParser(Class<? extends SolrDataQuery> clazz, QueryParser parser) {
-		Assert.notNull(parser, "Cannot register 'null' parser.");
-		parserPairs.add(0, new QueryParserPair(clazz, parser));
-		cache.clear();
-	}
-
-	/**
-	 * QueryParserPair holds reference form the {@link SolrQuery} to the {@link QueryParser} suitable for it
-	 *
-	 * @author Christoph Strobl
-	 */
-	private static class QueryParserPair {
-
-		private final Class<?> clazz;
-		private final QueryParser parser;
-
-		/**
-		 * @param clazz Class to register parser for
-		 * @param parser Parser capable of handling types of given class
-		 */
-		public QueryParserPair(Class<?> clazz, QueryParser parser) {
-			this.parser = parser;
-			this.clazz = clazz;
-		}
-
-		public QueryParser getParser() {
-			return this.parser;
-		}
-
-		/**
-		 * @param clazz
-		 * @return true if {@link ClassUtils#isAssignable(Class, Class)}
-		 */
-		public boolean canParser(Class<?> clazz) {
-			return ClassUtils.isAssignable(this.clazz, clazz);
-		}
-	}
-
+        for (final Map.Entry<Class<?>, QueryParser> entry : this.queryParsers.entrySet()) {
+            if (entry.getValue() == this.defaultQueryParser) {
+                updatedParsers.put(entry.getKey(), updatedDefaultQueryParser);
+            } else if (entry.getValue() == this.termsQueryParser) {
+                updatedParsers.put(entry.getKey(), updatedTermsQueryParser);
+            }
+        }
+        this.queryParsers.putAll(updatedParsers);
+        this.defaultQueryParser = updatedDefaultQueryParser;
+        this.termsQueryParser = updatedTermsQueryParser;
+    }
 }
